@@ -1,0 +1,144 @@
+# Publishes a new Zenodo version of repository/*.nc whenever a GitHub
+# Release is published on this repo (or on manual dispatch).
+#
+# Requires, on this repo:
+#   - Secret `ZENODO_TOKEN`: a Zenodo personal access token with
+#     `deposit:write` and `deposit:actions` scopes.
+#   - Variable `ZENODO_CONCEPT_ID`: the Zenodo concept record - a bare
+#     numeric ID (e.g. "22146822"), a DOI ("10.5281/zenodo.22146822"), or a
+#     full doi.org URL are all accepted; the numeric ID is extracted from it.
+#
+# Optional, for testing against Zenodo's sandbox instead of production:
+#   - Variable `ZENODO_BASE_URL`: Zenodo API host to use, e.g.
+#     "sandbox.zenodo.org". Defaults to "zenodo.org" if unset. Can also be
+#     overridden per-run via the zenodo_base_url workflow_dispatch input,
+#     which takes priority over the variable. sandbox.zenodo.org needs its
+#     own separate account/token/concept ID
+
+name: Sync to Zenodo
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version string to record in Zenodo (e.g. 0.1.0). Defaults to the release tag."
+        required: false
+      zenodo_base_url:
+        description: "Zenodo API host to use (e.g. sandbox.zenodo.org for testing). Leave blank to use the ZENODO_BASE_URL repo variable, or zenodo.org if that's also unset."
+        required: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve configuration
+        id: config
+        env:
+          ZENODO_BASE_URL_VAR: ${{ vars.ZENODO_BASE_URL }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          # Priority: workflow_dispatch input > ZENODO_BASE_URL repo
+          # variable > production default.
+          BASE_URL="${{ inputs.zenodo_base_url }}"
+          if [ -z "$BASE_URL" ]; then
+            BASE_URL="$ZENODO_BASE_URL_VAR"
+          fi
+          if [ -z "$BASE_URL" ]; then
+            BASE_URL="zenodo.org"
+          fi
+          echo "base_url=$BASE_URL" >> "$GITHUB_OUTPUT"
+          echo "Using Zenodo host: $BASE_URL"
+
+      # Zenodo's versions endpoint doesn't document a reliable
+      # "give me only the latest" query
+      - name: Find latest published version on Zenodo
+        id: latest
+        env:
+          ZENODO_CONCEPT_ID_RAW: ${{ vars.ZENODO_CONCEPT_ID }}
+          BASE_URL: ${{ steps.config.outputs.base_url }}
+        run: |
+          set -euo pipefail
+          # Accept a bare ID, a DOI, or a full doi.org URL - pull out just
+          # the trailing digits either way (mirrors _extract_record_id() in
+          # openairclim/utils/download_zenodo.py).
+          CONCEPT_ID=$(echo "$ZENODO_CONCEPT_ID_RAW" | grep -oE '[0-9]+' | tail -1)
+          if [ -z "$CONCEPT_ID" ]; then
+            echo "::error::Could not find a numeric Zenodo record ID in ZENODO_CONCEPT_ID='${ZENODO_CONCEPT_ID_RAW}'"
+            exit 1
+          fi
+          LATEST_ID=$(curl -sf "https://${BASE_URL}/api/records/${CONCEPT_ID}/versions" \
+            | jq -r '[.hits.hits[].id] | max')
+          if [ -z "$LATEST_ID" ] || [ "$LATEST_ID" = "null" ]; then
+            echo "::error::Could not resolve the latest Zenodo version from concept ID ${CONCEPT_ID} on ${BASE_URL}"
+            exit 1
+          fi
+          echo "latest_id=$LATEST_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Create a new draft version
+        id: draft
+        env:
+          ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
+          BASE_URL: ${{ steps.config.outputs.base_url }}
+        run: |
+          set -euo pipefail
+          DRAFT_URL=$(curl -sf -X POST \
+            "https://${BASE_URL}/api/deposit/depositions/${{ steps.latest.outputs.latest_id }}/actions/newversion" \
+            -H "Authorization: Bearer ${ZENODO_TOKEN}" \
+            | jq -r '.links.latest_draft')
+          echo "draft_url=$DRAFT_URL" >> "$GITHUB_OUTPUT"
+
+      # newversion carries the previous version's files into the new draft.
+      # Uploading with the same filenames overwrites those copied-over
+      # entries (S3-style bucket semantics), so no separate delete step
+      # is needed.
+      - name: Upload data files
+        env:
+          ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
+        run: |
+          set -euo pipefail
+          BUCKET=$(curl -sf "${{ steps.draft.outputs.draft_url }}" \
+            -H "Authorization: Bearer ${ZENODO_TOKEN}" | jq -r '.links.bucket')
+          for f in repository/*.nc; do
+            filename=$(basename "$f")
+            echo "Uploading $filename..."
+            curl -sf --upload-file "$f" "${BUCKET}/${filename}" \
+              -H "Authorization: Bearer ${ZENODO_TOKEN}"
+          done
+
+      # Read-modify-write: only touch `version`, so the title/authors/
+      # license/description Zenodo copied from the previous version survive.
+      - name: Set the version in the deposit's metadata
+        env:
+          ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
+        run: |
+          set -euo pipefail
+          CURRENT_METADATA=$(curl -sf "${{ steps.draft.outputs.draft_url }}" \
+            -H "Authorization: Bearer ${ZENODO_TOKEN}" | jq '.metadata')
+          UPDATED_METADATA=$(echo "$CURRENT_METADATA" \
+            | jq --arg v "${{ steps.config.outputs.version }}" '.version = $v')
+          curl -sf -X PUT "${{ steps.draft.outputs.draft_url }}" \
+            -H "Authorization: Bearer ${ZENODO_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"metadata\": ${UPDATED_METADATA}}"
+
+      # draft_url already points at whichever host created it (production
+      # or sandbox), so appending the action here needs no separate host
+      # handling.
+      - name: Publish the new version
+        env:
+          ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl -sf -X POST \
+            "${{ steps.draft.outputs.draft_url }}/actions/publish" \
+            -H "Authorization: Bearer ${ZENODO_TOKEN}"
