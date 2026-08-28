@@ -4,16 +4,19 @@
 # Requires, on this repo:
 #   - Secret `ZENODO_TOKEN`: a Zenodo personal access token with
 #     `deposit:write` and `deposit:actions` scopes.
-#   - Variable `ZENODO_CONCEPT_ID`: the Zenodo concept record - a bare
-#     numeric ID (e.g. "22146822"), a DOI ("10.5281/zenodo.22146822"), or a
-#     full doi.org URL are all accepted; the numeric ID is extracted from it.
+#   - Variable `ZENODO_RECORD_ID`: the record ID of ANY ALREADY-PUBLISHED
+#     version under the target Zenodo concept (e.g. the very first,
+#     manually-created version) - NOT the "concept DOI" shown in Zenodo's
+#     "Cite all versions" box. A bare numeric ID, a per-version DOI
+#     ("10.5281/zenodo.594413"), or a full doi.org URL are all accepted; the
+#     numeric ID is extracted from it.
 #
 # Optional, for testing against Zenodo's sandbox instead of production:
 #   - Variable `ZENODO_BASE_URL`: Zenodo API host to use, e.g.
 #     "sandbox.zenodo.org". Defaults to "zenodo.org" if unset. Can also be
 #     overridden per-run via the zenodo_base_url workflow_dispatch input,
 #     which takes priority over the variable. sandbox.zenodo.org needs its
-#     own separate account/token/concept ID
+#     own separate account/token/record ID
 
 name: Sync to Zenodo
 
@@ -71,22 +74,23 @@ jobs:
       - name: Find latest published version on Zenodo
         id: latest
         env:
-          ZENODO_CONCEPT_ID_RAW: ${{ vars.ZENODO_CONCEPT_ID }}
+          ZENODO_RECORD_ID_RAW: ${{ vars.ZENODO_RECORD_ID }}
           BASE_URL: ${{ steps.config.outputs.base_url }}
         run: |
           set -euo pipefail
           # Accept a bare ID, a DOI, or a full doi.org URL - pull out just
           # the trailing digits either way (mirrors _extract_record_id() in
-          # openairclim/utils/download_zenodo.py).
-          CONCEPT_ID=$(echo "$ZENODO_CONCEPT_ID_RAW" | grep -oE '[0-9]+' | tail -1)
-          if [ -z "$CONCEPT_ID" ]; then
-            echo "::error::Could not find a numeric Zenodo record ID in ZENODO_CONCEPT_ID='${ZENODO_CONCEPT_ID_RAW}'"
+          # openairclim/utils/download_zenodo.py). Must be an actual
+          # version's own ID, not the concept DOI - see header comment.
+          RECORD_ID=$(echo "$ZENODO_RECORD_ID_RAW" | grep -oE '[0-9]+' | tail -1)
+          if [ -z "$RECORD_ID" ]; then
+            echo "::error::Could not find a numeric Zenodo record ID in ZENODO_RECORD_ID='${ZENODO_RECORD_ID_RAW}'"
             exit 1
           fi
-          LATEST_ID=$(curl -sf "https://${BASE_URL}/api/records/${CONCEPT_ID}/versions" \
+          LATEST_ID=$(curl -sf "https://${BASE_URL}/api/records/${RECORD_ID}/versions" \
             | jq -r '[.hits.hits[].id] | max')
           if [ -z "$LATEST_ID" ] || [ "$LATEST_ID" = "null" ]; then
-            echo "::error::Could not resolve the latest Zenodo version from concept ID ${CONCEPT_ID} on ${BASE_URL}"
+            echo "::error::Could not resolve the latest Zenodo version from record ID ${RECORD_ID} on ${BASE_URL} - if this is the concept DOI's number rather than an actual version's own ID, that's why (see header comment)."
             exit 1
           fi
           echo "latest_id=$LATEST_ID" >> "$GITHUB_OUTPUT"
