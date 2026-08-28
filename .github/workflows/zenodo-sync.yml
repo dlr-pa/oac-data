@@ -23,8 +23,8 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version string to record in Zenodo (e.g. 0.1.0). Defaults to the release tag."
-        required: false
+        description: "Version string to record in Zenodo (e.g. 0.1.0). Required for manual runs - only actual release events can fall back to the tag."
+        required: true
       zenodo_base_url:
         description: "Zenodo API host to use (e.g. sandbox.zenodo.org for testing). Leave blank to use the ZENODO_BASE_URL repo variable, or zenodo.org if that's also unset."
         required: false
@@ -43,6 +43,13 @@ jobs:
           set -euo pipefail
           VERSION="${{ inputs.version }}"
           if [ -z "$VERSION" ]; then
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              # GITHUB_REF_NAME for a manual run is whatever branch/tag was
+              # picked in the dispatch dropdown (e.g. "main"), not a real
+              # version - only trust it for actual release events.
+              echo "::error::The 'version' input is required for manual runs - leaving it blank would record '${GITHUB_REF_NAME}' (the ref this ran against) as the version, not a real version number."
+              exit 1
+            fi
             VERSION="${GITHUB_REF_NAME#v}"
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
