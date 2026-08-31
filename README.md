@@ -8,6 +8,7 @@ This repository contains the minimum pre-calculated response surface and backgro
 ## Versioning
 The data in this repository is versioned independently from the OpenAirClim model.
 A new release is made here when there has been an update to the data.
+Each release is automatically deposited at Zenodo: https://doi.org/10.5281/zenodo.22146822.
 To ensure that new OpenAirClim model installations install this new data by default, please update `openairclim/repository.py` in the [main oac repository](https://github.com/dlr-pa/oac).
 
 ## Downloading the data
