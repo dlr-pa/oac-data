@@ -1,5 +1,9 @@
 # OpenAirClim Data
 
+[![oac-latest-tag](https://img.shields.io/github/v/tag/dlr-pa/oac?logo=github&label=oac)](https://github.com/dlr-pa/oac/tags)
+[![oac-data-latest-tag](https://img.shields.io/github/v/tag/dlr-pa/oac-data?logo=github&label=oac-data)](https://github.com/dlr-pa/oac-data/tags)
+[![data](https://img.shields.io/badge/10.5281%2Fzenodo.22146822-blue?logo=DOI&logoColor=white&label=zenodo)](https://doi.org/10.5281/zenodo.22146822)
+
 ## Description
 OpenAirClim is an open-source model for simplified evaluation of the approximate chemistry-climate impact of air traffic emissions.
 The main model repository is available at https://github.com/dlr-pa/oac.
